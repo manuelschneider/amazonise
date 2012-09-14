@@ -1,0 +1,6 @@
+#!/bin/bash
+
+partition="1"
+unpriviledgedUser="ellenkohl"
+temporaryLoopDev='loop3'
+cleanUpTmpdir=true

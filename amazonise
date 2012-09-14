@@ -1,0 +1,147 @@
+#!/bin/bash
+
+export myHome="$(dirname "$0")"
+
+source "$myHome/config/ec2config"
+source "$myHome/config/config"
+
+if [ -z "$1" ]; then
+    echo "  usage: $0 imageFile"
+    exit 0
+fi
+
+imgFile="$1"
+imgType="debian"
+
+if [ "$(id | cut -d "(" -f 1)" != "uid=0" ]; then
+    echo "    only root can do that. plz set unpriviledgedUser in config/config!"
+    exit 1
+fi
+
+export trapContent="true"
+
+function addTrapContent {
+    echo "$1 && $trapContent"
+    return 0
+}
+
+
+tmpdir="$(mktemp -d $myHome/tmp/amazoniseImage_XXXXXXXXX)" || exit 1
+# tmpdir=$myHome/tmp/amazoniseImage_F5TkbBdSu
+trapContent="$(addTrapContent "$cleanUpTmpdir && rm -fr \"$tmpdir\"")"
+trap "$trapContent" EXIT
+
+echo "==============================================="
+echo "    Step 1: Create a working-copy of"
+echo "            partition 1 of the image"
+echo "==============================================="
+
+echo "setting up loopdev and kpartx"
+losetup /dev/$temporaryLoopDev "$imgFile"   || exit 1
+trapContent="$(addTrapContent 'losetup -d /dev/$temporaryLoopDev')"
+trap "$trapContent" EXIT
+kpartx -a /dev/$temporaryLoopDev   || exit 1
+trapContent="$(addTrapContent 'kpartx -d /dev/$temporaryLoopDev')"
+trap "$trapContent" EXIT
+
+echo "copy first partition"
+dd if="/dev/mapper/${temporaryLoopDev}p$partition" of="$tmpdir/$(basename $imgFile)" || exit 1
+imgFile="${tmpdir}/$(basename $imgFile)"
+
+chown -R $unpriviledgedUser:$unpriviledgedUser $tmpdir || exit 1
+
+echo "cleaning up loopdev and kpartx"
+kpartx -d /dev/$temporaryLoopDev
+losetup -d /dev/$temporaryLoopDev
+trapContent="$cleanUpTmpdir && rm -fr \"$tmpdir\""
+trap "$trapContent" EXIT
+
+
+echo "==============================================="
+echo "    Step 2: Amazonising the image"
+echo "==============================================="
+
+
+tmpMountPoint="$(mktemp -d /tmp/amazoniseImageMountPoint_XXXXXXXXX)" || exit 1
+trapContent="$(addTrapContent 'rmdir "${tmpMountPoint}"')"
+trap "$trapContent" EXIT
+
+echo "mount image"
+mount -o loop "$imgFile" "$tmpMountPoint"  || exit 1
+trapContent="$(addTrapContent 'umount "$tmpMountPoint"')"
+trap "$trapContent" EXIT
+
+echo "mount stuff in image"
+mount --bind /dev "$tmpMountPoint/dev"  || exit 1
+trapContent="$(addTrapContent 'umount "$tmpMountPoint/dev"')"
+trap "$trapContent" EXIT
+
+chroot "$tmpMountPoint" mount /proc  || exit 1
+trapContent="$(addTrapContent 'chroot "$tmpMountPoint" umount /proc')"
+trap "$trapContent" EXIT
+
+chroot "$tmpMountPoint" mount /sys  || exit 1
+trapContent="$(addTrapContent 'chroot "$tmpMountPoint" umount /sys')"
+trap "$trapContent" EXIT
+
+chroot "$tmpMountPoint" mount -t devpts none /dev/pts  || exit 1
+trapContent="$(addTrapContent 'chroot "$tmpMountPoint" umount /dev/pts')"
+trap "$trapContent" EXIT
+
+echo "run type-specific stuff"
+$myHome/scripts/$imgType "$myHome" "$tmpMountPoint" "$tmpdir" || exit 1
+EC2_ARCH=$(cat "$tmpdir/arch")
+
+
+chroot "$tmpMountPoint" umount /dev/pts
+chroot "$tmpMountPoint" umount /sys
+chroot "$tmpMountPoint" umount /proc
+umount "$tmpMountPoint/dev"
+umount "$tmpMountPoint"
+rmdir "${tmpMountPoint}"
+trapContent="$cleanUpTmpdir && rm -fr \"$tmpdir\""
+trap "$trapContent" EXIT
+
+echo "==============================================="
+echo "    Step 3: Bundle, upload and register image"
+echo "==============================================="
+
+echo "arch is $EC2_ARCH"
+
+export EC2_HOME=${myHome}/ec2/ami/current/
+
+kernel="${ec2_kernels[${ec2_region}_${EC2_ARCH}]}"
+
+su -c "${myHome}/ec2/ami/current/bin/ec2-bundle-image --kernel=\"$kernel\" --arch \"$EC2_ARCH\" --destination \"$tmpdir/\" -i \"$imgFile\" -k \"${myHome}/config/$ec2_keyfile\" -c \"${myHome}/config/$ec2_certfile\" -u \"$ec2_user\" || exit 1" "$unpriviledgedUser"  || exit 1
+
+location=${ec2_region:0:2}
+su -c "${myHome}/ec2/ami/current/bin/ec2-upload-bundle --location \"${location^^}\" -b \"$s3_bucket\" -m \"${tmpdir}/$(basename $imgFile).manifest.xml\" -a \"$s3_accessKey\" -s \"$s3_secretKey\" || exit 1" "$unpriviledgedUser" || exit 1 
+
+echo "(re-)registering ami.."
+export EC2_HOME=${myHome}/ec2/api/current/
+export JAVA_HOME=/usr/lib/jvm/default-java/
+
+imageAvailable="$(su -c "${myHome}/ec2/api/current/bin/ec2-describe-images --owner self -K \"${myHome}/config/$ec2_keyfile\" -C \"${myHome}/config/$ec2_certfile\" --region \"$ec2_region\"  || exit 1" "$unpriviledgedUser" | grep "$(basename $imgFile)")"
+
+if [ -n "$imageAvailable" ]; then
+    oldAmiId="$(echo "$imageAvailable" | cut -f 2)"
+    echo "  de-registering old-ami $oldAmiId"
+    su -c "${myHome}/ec2/api/current/bin/ec2-deregister \"$oldAmiId\" -K \"${myHome}/config/$ec2_keyfile\" -C \"${myHome}/config/$ec2_certfile\" --region \"$ec2_region\"  || exit 1" "$unpriviledgedUser" || exit 1
+fi
+
+echo "  registering ami"
+
+ami="$(su -c "${myHome}/ec2/api/current/bin/ec2-register \"$s3_bucket/$(basename $imgFile).manifest.xml\" --kernel=\"$kernel\" -n \"$(basename $imgFile)\" -K \"${myHome}/config/$ec2_keyfile\" -C \"${myHome}/config/$ec2_certfile\" --region \"$ec2_region\"  || exit 1" "$unpriviledgedUser" | cut -f 2)"
+
+if [ -z "$ami" ]; then
+    echo "  failed."
+    exit 1
+fi
+
+echo "registered ami: $ami"
+
+
+exit 0
+
+
+

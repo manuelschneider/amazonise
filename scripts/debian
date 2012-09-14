@@ -1,0 +1,56 @@
+#!/bin/bash
+
+if [ -z "$1" -o -z "$2" -o -z "$3" ]; then
+    echo "  usage: $0 <amazonisehome> <tmpMountpoint>"
+    exit 1
+fi
+
+myHome="$1"
+tmpMountPoint="$2"
+tmpdir="$3"
+
+echo "  amazonising a debian-image..."
+
+declare -A debian_kernels=( ["x86_64"]="linux-image-xen-amd64" ["i386"]="linux-image-xen-686" )
+
+echo -n "    copying assets.."
+cp $myHome/assets/debian/usr/local/bin/* $tmpMountPoint/usr/local/bin/  || exit 1
+cp $myHome/assets/debian/etc/fstab $tmpMountPoint/etc/  || exit 1
+cp $myHome/assets/debian/etc/rc.local $tmpMountPoint/etc/  || exit 1
+cp $myHome/assets/debian/etc/grub.d/40_custom $tmpMountPoint/etc/grub.d/  || exit 1
+echo "..done"
+
+echo -n "    detecting arch.."
+EC2_ARCH="$(chroot "$tmpMountPoint" arch)"  || exit 1
+echo $EC2_ARCH > $tmpdir/arch || exit 1
+echo "..done, arch is: $EC2_ARCH."
+
+echo "    preparing grub for pvgrub aki"
+chroot "$tmpMountPoint" chmod -R -x /etc/grub.d/ || exit 1
+chroot "$tmpMountPoint" chmod +x /etc/grub.d/ || exit 1
+chroot "$tmpMountPoint" chmod +x /etc/grub.d/40_custom || exit 1
+chroot "$tmpMountPoint" update-grub || exit 1
+echo "    removing incompatible dhcp-clients.."
+chroot "$tmpMountPoint" aptitude purge -y isc-dhcp-client isc-dhcp-common dhcp3-client  || exit 1
+echo "    installing required packages.."
+DEBIAN_KERNEL="${debian_kernels[${EC2_ARCH}]}" 
+chroot "$tmpMountPoint" aptitude install -y curl dhcpcd resolvconf ${DEBIAN_KERNEL}  || exit 1
+echo "    removing incompatible kernels"
+chroot "$tmpMountPoint" dpkg --list | grep linux-image | grep -v xen | sed -r "s/\s+/ /g" | cut -d " " -f 2 | while read kernel; do
+    chroot "$tmpMountPoint" aptitude purge -y $kernel
+done
+echo "    cleaning up aptitude.."
+chroot "$tmpMountPoint" aptitude -y purge  || exit 1
+chroot "$tmpMountPoint" aptitude -y clean  || exit 1
+read
+echo "    updating grub again"
+chroot "$tmpMountPoint" update-grub || exit 1
+echo "    updating initrds"
+update-initramfs -u -k all || exit 1
+echo "    deactivating hwclock"
+chroot "$tmpMountPoint" update-rc.d -f hwclock.sh remove || exit 1
+chroot "$tmpMountPoint" update-rc.d -f hwclockfirst.sh remove  || exit 1
+
+echo "  done"
+exit 0
+

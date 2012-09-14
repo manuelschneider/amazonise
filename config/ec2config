@@ -1,0 +1,18 @@
+#!/bin/bash
+
+ec2_user="xxx"
+s3_accessKey="xxx"
+s3_secretKey="xxx"
+s3_bucket="xxx"
+
+ec2_region="eu-west-1"
+
+#hd0
+declare -A ec2_kernels=( ["us-east-1_x86_64"]="aki-427d952b" ["us-west-1_x86_64"]="aki-9ba0f1de" ["eu-west-1_x86_64"]="aki-4feec43b" ["ap-southeast-1_x86_64"]="aki-11d5aa43" ["ap-northeast-1_x86_64"]="aki-d409a2d5" ["us-west-2_x86_64"]="aki-98e26fa8" ["us-east-1_i386"]="aki-407d9529" ["us-west-1_i386"]="aki-99a0f1dc" ["eu-west-1_i386"]="aki-4deec439" ["ap-southeast-1_i386"]="aki-13d5aa41" ["ap-northeast-1_i386"]="aki-d209a2d3" ["us-west-2_i386"]="aki-c2e26ff2" )
+
+#hd00
+# declare -A ec2_kernels=( ["us-east-1_x86_64"]="aki-4e7d9527" ["us-west-1_x86_64"]="aki-9fa0f1da" ["eu-west-1_x86_64"]="aki-41eec435" ["ap-southeast-1_x86_64"]="aki-6dd5aa3f" ["us-east-1_i386"]="aki-4c7d9525" ["us-west-1_i386"]="aki-9da0f1d8" ["eu-west-1_i386"]="aki-47eec433" ["ap-southeast-1_i386"]="aki-6fd5aa3d" )
+
+ec2_keyfile='xxx'
+ec2_certfile='xxx'
+
